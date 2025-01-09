@@ -31,18 +31,17 @@ On AWS EC2 instances, hardware feature visibility is limited by virtualization. 
 
 ## Instance Profile Configuration
 
-The EC2 instance running the CPU monitoring stack requires IAM permissions to interact with AWS services (CloudWatch, EC2, and Systems Manager).
-
-cloudwatch:PutMetricData
-ec2:DescribeInstances
-ec2:DescribeInstanceStatus
-ec2:MonitorInstances
-ssm:SendCommand
-ssm:GetCommandInvocation
-ssm:UpdateInstanceInformation
-ssm:UpdateAssociationStatus
-ssm:DescribeAssociation
-ssm:GetDocument
+The EC2 instance running the CPU monitoring stack requires IAM permissions to interact with AWS services (CloudWatch, EC2, and Systems Manager):
+- cloudwatch:PutMetricData
+- ec2:DescribeInstances
+- ec2:DescribeInstanceStatus
+- ec2:MonitorInstances
+- ssm:SendCommand
+- ssm:GetCommandInvocation
+- ssm:UpdateInstanceInformation
+- ssm:UpdateAssociationStatus
+- ssm:DescribeAssociation
+- ssm:GetDocument
 
 ## Notes: Limitations
 
@@ -55,22 +54,31 @@ Even though the AMD EPYC processor physically supports more C-states (C3-C6), th
 
 These limitations are intentional design choices in the AWS virtualization infrastructure.
 
+## Deployment Command
+Please replace `<your_instance_id>` with your EC2 instance ID from the AWS console.
+
 ```bash
 aws cloudformation create-stack \
 --stack-name cpu-stress-test-stable \
 --template-body file://turbostat.yaml \
 --capabilities CAPABILITY_IAM \
 --parameters \
-  ParameterKey=TargetInstanceId,ParameterValue=i-037d5e5c2a2fbd6b8
+  ParameterKey=TargetInstanceId,ParameterValue=<your_instance_id>
 ```
-Stress Command
+## Stress Testing Commands
+Please ignore this if you are testing using your own application.
+I have used M7a.24XL and used stress-ng to simulate load with following commands.
+
 ```bash
-stress-ng --cpu 96 --cpu-method all --cpu-ops 0 --taskset 0-95 --cpu-load 100 --sched fifo --sched-prio 95 --aggressive --verify &
+# Apply stress test
 stress-ng --cpu 96 --cpu-load 100 &
+
+# Stop stress test
 pkill stress-ng
 ```
-If you started the cloudformation without the IAM role and then attached it later. please restart the SSSM agent so it can refresh the credentials
 
+## SSM Agent Management
+If you started the CloudFormation without the IAM role and then attached it later, please restart the SSM agent to refresh the credentials:
 ```bash
 sudo systemctl restart amazon-ssm-agent
 sudo systemctl status amazon-ssm-agent
