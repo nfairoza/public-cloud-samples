@@ -83,3 +83,7 @@ If you started the CloudFormation without the IAM role and then attached it late
 sudo systemctl restart amazon-ssm-agent
 sudo systemctl status amazon-ssm-agent
 ```
+
+## Sample CPU Dashboard
+
+![Alt text](/example.png)
