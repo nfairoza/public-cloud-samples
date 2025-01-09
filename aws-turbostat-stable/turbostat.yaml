@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CPU Monitoring with Turbostat'
+
+Parameters:
+  TargetInstanceId:
+    Type: String
+    Description: ID of the existing EC2 instance to monitor
+
+Resources:
+  MonitoringDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Command
+      Content:
+        schemaVersion: '2.2'
+        description: 'CPU monitoring with turbostat'
+        parameters:
+          instanceId:
+            type: String
+            description: "EC2 Instance ID"
+        mainSteps:
+          - action: aws:runShellScript
+            name: MonitorCPU
+            inputs:
+              runCommand:
+                - |
+                  #!/bin/bash
+                  set -ex
+                  if [ -f /etc/os-release ]; then
+                      . /etc/os-release
+                      case $ID in
+                          "amzn"|"rhel"|"centos") sudo yum install -y turbostat ;;
+                          "ubuntu"|"debian")
+                              sudo apt-get update
+                              sudo apt-get install -y linux-tools-common linux-tools-generic msr-tools
+                              sudo modprobe msr
+                              sudo chmod o+r /dev/cpu/*/msr 2>/dev/null || true
+                              ;;
+                      esac
+                  fi
+                  lsmod | grep -q '^msr' || sudo modprobe msr
+                  echo "Starting monitoring for instance {{ instanceId }}"
+                  aws ec2 monitor-instances --instance-ids {{ instanceId }}
+                  # Start turbostat monitoring
+                  echo "Starting turbostat..."
+                  sudo turbostat --show Avg_MHz,Busy%,Bzy_MHz,POLL%,C1%,C2% --interval 1 | \
+                  while read -r line; do
+                      if [[ $line =~ ^[0-9] ]]; then
+                          avg_mhz=$(echo "$line" | awk '{print $1}')
+                          busy=$(echo "$line" | awk '{print $2}')
+                          bzy_mhz=$(echo "$line" | awk '{print $3}')
+                          poll_pct=$(echo "$line" | awk '{print $4}')
+                          c1_pct=$(echo "$line" | awk '{print $5}')
+                          c2_pct=$(echo "$line" | awk '{print $6}')
+                          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+                          aws cloudwatch put-metric-data \
+                              --storage-resolution 1 \
+                              --namespace "CPUStressTest" \
+                              --metric-data "[
+                                  {
+                                      \"MetricName\": \"AverageMHz\",
+                                      \"Value\": $avg_mhz,
+                                      \"Unit\": \"None\",
+                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                      \"Timestamp\": \"$timestamp\"
+                                  },
+                                  {
+                                      \"MetricName\": \"Busy%\",
+                                      \"Value\": $busy,
+                                      \"Unit\": \"Percent\",
+                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                      \"Timestamp\": \"$timestamp\"
+                                  },
+                                  {
+                                      \"MetricName\": \"CPUFrequency\",
+                                      \"Value\": $bzy_mhz,
+                                      \"Unit\": \"None\",
+                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                      \"Timestamp\": \"$timestamp\"
+                                  },
+                                  {
+                                      \"MetricName\": \"POLL_Percent\",
+                                      \"Value\": $poll_pct,
+                                      \"Unit\": \"Percent\",
+                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                      \"Timestamp\": \"$timestamp\"
+                                  },
+                                  {
+                                      \"MetricName\": \"C1_Percent\",
+                                      \"Value\": $c1_pct,
+                                      \"Unit\": \"Percent\",
+                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                      \"Timestamp\": \"$timestamp\"
+                                  },
+                                  {
+                                      \"MetricName\": \"C2_Percent\",
+                                      \"Value\": $c2_pct,
+                                      \"Unit\": \"Percent\",
+                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                      \"Timestamp\": \"$timestamp\"
+                                  }
+                              ]"
+                      fi
+                  done
+
+  RunMonitoring:
+    Type: AWS::SSM::Association
+    Properties:
+      Name: !Ref MonitoringDocument
+      Targets:
+        - Key: InstanceIds
+          Values:
+            - !Ref TargetInstanceId
+      Parameters:
+        instanceId:
+          - !Ref TargetInstanceId
+
+  CPUDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub ${AWS::StackName}-monitoring
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["CPUStressTest", "CPUFrequency", "InstanceId", "${TargetInstanceId}", {"label": "Bzy_MHz", "yAxis": "left", "period": 30}],
+                  [".", "AverageMHz", ".", ".", {"label": "Avg_MHz", "yAxis": "left", "period": 30}],
+                  [".", "Busy%", ".", ".", {"label": "Busy%", "color": "#2ca02c", "yAxis": "right", "period": 30}]
+                ],
+                "period": 30,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "CPU Metrics During Gradual Load Increase",
+                "view": "timeSeries",
+                "yAxis": {
+                  "left": {
+                    "min": 0,
+                    "max": 4000,
+                    "label": "MHz"
+                  },
+                  "right": {
+                    "min": 0,
+                    "max": 100,
+                    "label": "Busy %"
+                  },
+                  "legend": {
+                    "position": "right"
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["AWS/EC2", "CPUUtilization", "InstanceId", "${TargetInstanceId}", {"label": "CPU Utilization", "yAxis": "right"}],
+                  ["CPUStressTest", "AverageMHz", ".", ".", {"label": "Avg_MHz", "yAxis": "left"}]
+                ],
+                "period": 1,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "CPU Utilization vs Average Frequency",
+                "view": "timeSeries",
+                "yAxis": {
+                  "left": {
+                    "min": 0,
+                    "max": 4000,
+                    "label": "MHz"
+                  },
+                  "right": {
+                    "min": 0,
+                    "max": 100,
+                    "label": "CPU Utilization %"
+                  },
+                  "legend": {
+                    "position": "right"
+                  }
+                }
+              }
+            },
+            {
+              "type": "metric",
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  ["CPUStressTest", "C2_Percent", "InstanceId", "${TargetInstanceId}", {"label": "C2 State %", "color": "#2ca02c"}],
+                  [".", "C1_Percent", ".", ".", {"label": "C1 State %", "color": "#ff7f0e"}],
+                  [".", "POLL_Percent", ".", ".", {"label": "POLL State %", "color": "#1f77b4"}]
+                ],
+                "period": 1,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "CPU Power States Distribution",
+                "view": "timeSeries",
+                "yAxis": {
+                  "left": {
+                    "min": 0,
+                    "max": 100,
+                    "label": "Percentage"
+                  }
+                },
+                "legend": {
+                  "position": "right"
+                }
+              }
+            }
+          ]
+        }
+
+Outputs:
+  DashboardURL:
+    Description: URL for the CPU Monitoring Dashboard
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-monitoring
