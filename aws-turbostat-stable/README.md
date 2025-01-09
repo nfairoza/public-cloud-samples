@@ -65,6 +65,17 @@ aws cloudformation create-stack \
 --parameters \
   ParameterKey=TargetInstanceId,ParameterValue=<your_instance_id>
 ```
+## Get Coudformation output from CLI
+```bash
+# wait for completion and print Outputs
+aws cloudformation wait stack-create-complete \
+    --stack-name cpu-stress-test-stable && \
+aws cloudformation describe-stacks \
+    --stack-name cpu-stress-test-stable \
+    --query 'Stacks[0].Outputs[*]' \
+    --output table
+```
+
 ## Stress Testing Commands
 Please ignore this if you are testing using your own application.
 I have used M7a.24XL and used stress-ng to simulate load with following commands.
