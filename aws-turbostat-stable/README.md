@@ -86,4 +86,4 @@ sudo systemctl status amazon-ssm-agent
 
 ## Sample CPU Dashboard
 
-![Alt text](/aws=turbostat-stable/example.png)
+![Alt text](/aws-turbostat-stable/example.png)
