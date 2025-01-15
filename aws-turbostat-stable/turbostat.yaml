@@ -6,6 +6,13 @@ Parameters:
     Type: String
     Description: ID of the existing EC2 instance to monitor
 
+  MonitoringTimeout:
+    Type: Number
+    Description: Timeout in minutes for turbostat monitoring (default 30 minutes)
+    Default: 30
+    MinValue: 1
+    MaxValue: 1440
+
 Resources:
   MonitoringDocument:
     Type: AWS::SSM::Document
@@ -18,6 +25,10 @@ Resources:
           instanceId:
             type: String
             description: "EC2 Instance ID"
+          timeoutMinutes:
+            type: String
+            description: "Monitoring timeout in minutes"
+            default: "30"
         mainSteps:
           - action: aws:runShellScript
             name: MonitorCPU
@@ -41,68 +52,89 @@ Resources:
                   lsmod | grep -q '^msr' || sudo modprobe msr
                   echo "Starting monitoring for instance {{ instanceId }}"
                   aws ec2 monitor-instances --instance-ids {{ instanceId }}
-                  # Start turbostat monitoring
-                  echo "Starting turbostat..."
-                  sudo turbostat --show Avg_MHz,Busy%,Bzy_MHz,POLL%,C1%,C2% --interval 1 | \
-                  while read -r line; do
-                      if [[ $line =~ ^[0-9] ]]; then
-                          avg_mhz=$(echo "$line" | awk '{print $1}')
-                          busy=$(echo "$line" | awk '{print $2}')
-                          bzy_mhz=$(echo "$line" | awk '{print $3}')
-                          poll_pct=$(echo "$line" | awk '{print $4}')
-                          c1_pct=$(echo "$line" | awk '{print $5}')
-                          c2_pct=$(echo "$line" | awk '{print $6}')
-                          timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-                          aws cloudwatch put-metric-data \
-                              --storage-resolution 1 \
-                              --namespace "CPUStressTest" \
-                              --metric-data "[
-                                  {
-                                      \"MetricName\": \"AverageMHz\",
-                                      \"Value\": $avg_mhz,
-                                      \"Unit\": \"None\",
-                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
-                                      \"Timestamp\": \"$timestamp\"
-                                  },
-                                  {
-                                      \"MetricName\": \"Busy%\",
-                                      \"Value\": $busy,
-                                      \"Unit\": \"Percent\",
-                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
-                                      \"Timestamp\": \"$timestamp\"
-                                  },
-                                  {
-                                      \"MetricName\": \"CPUFrequency\",
-                                      \"Value\": $bzy_mhz,
-                                      \"Unit\": \"None\",
-                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
-                                      \"Timestamp\": \"$timestamp\"
-                                  },
-                                  {
-                                      \"MetricName\": \"POLL_Percent\",
-                                      \"Value\": $poll_pct,
-                                      \"Unit\": \"Percent\",
-                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
-                                      \"Timestamp\": \"$timestamp\"
-                                  },
-                                  {
-                                      \"MetricName\": \"C1_Percent\",
-                                      \"Value\": $c1_pct,
-                                      \"Unit\": \"Percent\",
-                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
-                                      \"Timestamp\": \"$timestamp\"
-                                  },
-                                  {
-                                      \"MetricName\": \"C2_Percent\",
-                                      \"Value\": $c2_pct,
-                                      \"Unit\": \"Percent\",
-                                      \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
-                                      \"Timestamp\": \"$timestamp\"
-                                  }
-                              ]"
-                      fi
-                  done
+
+                  TIMEOUT_SECONDS=$(({{ timeoutMinutes }} * 60))
+                  echo "Starting turbostat with $(( TIMEOUT_SECONDS / 60 )) minute timeout..."
+
+                  (
+                    sudo turbostat --show Avg_MHz,Busy%,Bzy_MHz,POLL%,C1%,C2% --interval 1 | \
+                    while read -r line; do
+                        if [[ $line =~ ^[0-9] ]]; then
+                            avg_mhz=$(echo "$line" | awk '{print $1}')
+                            busy=$(echo "$line" | awk '{print $2}')
+                            bzy_mhz=$(echo "$line" | awk '{print $3}')
+                            poll_pct=$(echo "$line" | awk '{print $4}')
+                            c1_pct=$(echo "$line" | awk '{print $5}')
+                            c2_pct=$(echo "$line" | awk '{print $6}')
+                            timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+                            aws cloudwatch put-metric-data \
+                                --storage-resolution 1 \
+                                --namespace "CPUStressTest" \
+                                --metric-data "[
+                                    {
+                                        \"MetricName\": \"AverageMHz\",
+                                        \"Value\": $avg_mhz,
+                                        \"Unit\": \"None\",
+                                        \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                        \"Timestamp\": \"$timestamp\"
+                                    },
+                                    {
+                                        \"MetricName\": \"Busy%\",
+                                        \"Value\": $busy,
+                                        \"Unit\": \"Percent\",
+                                        \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                        \"Timestamp\": \"$timestamp\"
+                                    },
+                                    {
+                                        \"MetricName\": \"CPUFrequency\",
+                                        \"Value\": $bzy_mhz,
+                                        \"Unit\": \"None\",
+                                        \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                        \"Timestamp\": \"$timestamp\"
+                                    },
+                                    {
+                                        \"MetricName\": \"POLL_Percent\",
+                                        \"Value\": $poll_pct,
+                                        \"Unit\": \"Percent\",
+                                        \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                        \"Timestamp\": \"$timestamp\"
+                                    },
+                                    {
+                                        \"MetricName\": \"C1_Percent\",
+                                        \"Value\": $c1_pct,
+                                        \"Unit\": \"Percent\",
+                                        \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                        \"Timestamp\": \"$timestamp\"
+                                    },
+                                    {
+                                        \"MetricName\": \"C2_Percent\",
+                                        \"Value\": $c2_pct,
+                                        \"Unit\": \"Percent\",
+                                        \"Dimensions\": [{\"Name\": \"InstanceId\", \"Value\": \"{{ instanceId }}\"}],
+                                        \"Timestamp\": \"$timestamp\"
+                                    }
+                                ]"
+                        fi
+                    done
+                  ) &
+                  TURBOSTAT_PID=$!
+
+                  # Wait for timeout or process completion
+                  (
+                    sleep $TIMEOUT_SECONDS
+                    echo "Timeout reached after $(( TIMEOUT_SECONDS / 60 )) minutes. Stopping turbostat..."
+                    sudo kill -TERM $TURBOSTAT_PID 2>/dev/null || true
+                    sudo killall turbostat 2>/dev/null || true
+                  ) &
+                  TIMEOUT_PID=$!
+
+                  # Wait for either turbostat to finish or timeout to occur
+                  wait $TURBOSTAT_PID 2>/dev/null || true
+                  kill $TIMEOUT_PID 2>/dev/null || true
+
+                  echo "Monitoring completed"
 
   RunMonitoring:
     Type: AWS::SSM::Association
@@ -115,6 +147,8 @@ Resources:
       Parameters:
         instanceId:
           - !Ref TargetInstanceId
+        timeoutMinutes:
+          - !Ref MonitoringTimeout
 
   CPUDashboard:
     Type: AWS::CloudWatch::Dashboard

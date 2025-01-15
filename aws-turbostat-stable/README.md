@@ -54,26 +54,22 @@ Even though the AMD EPYC processor physically supports more C-states (C3-C6), th
 
 These limitations are intentional design choices in the AWS virtualization infrastructure.
 
+Please note the "AWS/EC2" CPUUtilization metric in widget 2 in the cloudwatch dashboard continues to appear even after our turbostat script exits because it's a default EC2 metric that Amazon provides automatically for all EC2 instances.
+
 ## Deployment Command
-Please replace `<your_instance_id>` with your EC2 instance ID from the AWS console.
+Please replace `<your_instance_id>` with your EC2 instance ID from the AWS console and `<your_timeout_duration>` with timeout duration in minutes. If this parameter is not given default is 30 minutes.
 
 ```bash
-aws cloudformation create-stack \
---stack-name cpu-stress-test-stable \
---template-body file://turbostat.yaml \
---capabilities CAPABILITY_IAM \
---parameters \
-  ParameterKey=TargetInstanceId,ParameterValue=<your_instance_id>
+aws cloudformation create-stack --stack-name cpu-stress-test-stable --template-body file://turbostat.yaml --parameters ParameterKey=TargetInstanceId,ParameterValue=<your_instance_id> ParameterKey=MonitoringTimeout,ParameterValue=<your_timeout_duration> --capabilities CAPABILITY_IAM
 ```
 ## Get Coudformation output from CLI
 ```bash
-# wait for completion and print Outputs
 aws cloudformation wait stack-create-complete \
     --stack-name cpu-stress-test-stable && \
 aws cloudformation describe-stacks \
     --stack-name cpu-stress-test-stable \
     --query 'Stacks[0].Outputs[*]' \
-    --output table
+    --output text
 ```
 
 ## Stress Testing Commands
@@ -81,11 +77,11 @@ Please ignore this if you are testing using your own application.
 I have used M7a.24XL and used stress-ng to simulate load with following commands.
 
 ```bash
-# Apply stress test
-stress-ng --cpu 96 --cpu-load 100 &
+#  OPTIONAL stress test for 10 min
+sudo sudo stress-ng --cpu 96 --cpu-load 100 --cpu-method matrixprod --timeout 10m &
 
 # Stop stress test
-pkill stress-ng
+sudo pkill stress-ng
 ```
 
 ## SSM Agent Management
@@ -98,3 +94,11 @@ sudo systemctl status amazon-ssm-agent
 ## Sample CPU Dashboard
 
 ![Alt text](/aws-turbostat-stable/example.png)
+
+## Cleanup Instructions
+### CloudFormation Stack Cleanup
+To clean up all resources created by this template, run the following command.
+
+```bash
+aws cloudformation delete-stack --stack-name cpu-stress-test-stable && aws cloudformation wait stack-delete-complete --stack-name cpu-stress-test-stable
+```
